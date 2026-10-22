@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#fff4dc">
+<title>Jogo da Memória — Bichinhos</title>
+<style>
+  :root { --bg:#fff4dc; --ink:#493b32; --card:#fffdf7; --accent:#f2a65a; --back:#a8d8c8; --shadow:0 4px 0 rgba(73,59,50,.12); }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font-family: "Trebuchet MS", system-ui, sans-serif; display:flex; justify-content:center; }
+  .app { width:min(100%,520px); padding:18px 14px 24px; display:flex; flex-direction:column; align-items:center; gap:12px; }
+  header { text-align:center; width:100%; }
+  h1 { margin:2px 0 4px; font-size:clamp(1.55rem,6vw,2rem); }
+  .subtitle { margin:0; font-size:1rem; }
+  .stats { display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; width:100%; }
+  .pill { background:#fffdf7; border-radius:999px; padding:8px 13px; font-weight:800; box-shadow:var(--shadow); font-size:.95rem; }
+  .board { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; width:100%; }
+  .tile { border:0; border-radius:18px; background:var(--card); min-width:0; aspect-ratio:1 / 1.08; padding:0; box-shadow:var(--shadow); cursor:pointer; position:relative; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
+  .tile:focus-visible, button:focus-visible { outline:4px solid #493b32; outline-offset:3px; }
+  .tile .face { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:18px; font-size:clamp(2.5rem,12vw,4.2rem); transition:transform .18s ease; }
+  .tile .back { background:var(--back); font-size:clamp(1.7rem,8vw,2.5rem); }
+  .tile.revealed .back, .tile.matched .back { display:none; }
+  .tile .front { display:none; }
+  .tile.revealed .front, .tile.matched .front { display:flex; }
+  .tile.matched { background:#e5f5c9; box-shadow:inset 0 0 0 3px #8abf75; cursor:default; }
+  .tile.matched::after { content:"✓"; position:absolute; right:7px; top:4px; font-size:1rem; font-weight:900; color:#4b813d; }
+  .actions { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
+  .action { border:0; border-radius:999px; padding:12px 17px; font:inherit; font-weight:800; color:var(--ink); background:#f2a65a; box-shadow:var(--shadow); cursor:pointer; }
+  .action.secondary { background:#fffdf7; }
+  .message { min-height:2.7em; text-align:center; font-size:1.08rem; font-weight:800; padding:4px 8px; }
+  .grownup { font-size:.82rem; opacity:.8; text-align:center; margin:0; max-width:38ch; }
+  @media (max-width:360px) { .app{padding:12px 10px 18px;gap:10px}.board{gap:8px}.tile{border-radius:14px}.tile .face{border-radius:14px} }
+  @media (prefers-reduced-motion:reduce) { * { transition:none!important; } }
+</style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <h1>🐻 Jogo da Memória</h1>
+    <p class="subtitle">Encontre os pares de bichinhos!</p>
+  </header>
+  <div class="stats" aria-live="polite">
+    <div class="pill">⭐ Pares: <span id="pairs">0</span> de 6</div>
+    <div class="pill">👆 Viradas: <span id="turns">0</span></div>
+  </div>
+  <section class="board" id="board" aria-label="Tabuleiro com 12 cartas"></section>
+  <div class="message" id="message" role="status" aria-live="polite">Toque em duas cartas para brincar!</div>
+  <div class="actions">
+    <button class="action" id="restart" type="button">🔄 Jogar de novo</button>
+    <button class="action secondary" id="show" type="button">👀 Ver os pares</button>
+  </div>
+  <p class="grownup">Dica para o adulto: brinque junto e ajude a criança a nomear os animais.</p>
+</main>
+<script>
+(() => {
+  const animals = [
+    {emoji:"🐶",name:"cachorro"},{emoji:"🐱",name:"gato"},
+    {emoji:"🐸",name:"sapo"},{emoji:"🦊",name:"raposa"},
+    {emoji:"🐼",name:"panda"},{emoji:"🐰",name:"coelho"}
+  ];
+  const board = document.getElementById("board");
+  const pairsEl = document.getElementById("pairs");
+  const turnsEl = document.getElementById("turns");
+  const message = document.getElementById("message");
+  const restart = document.getElementById("restart");
+  const show = document.getElementById("show");
+  let first = null, second = null, lock = false, pairs = 0, turns = 0, mismatchTimer = null;
+
+  function shuffle(items) {
+    const a = items.slice();
+    for (let i=a.length-1; i>0; i--) {
+      const j = Math.floor(Math.random()*(i+1));
+      [a[i],a[j]]=[a[j],a[i]];
+    }
+    return a;
+  }
+  function makeCard(animal, index) {
+    const button = document.createElement("button");
+    button.className = "tile";
+    button.type = "button";
+    button.dataset.animal = animal.name;
+    button.setAttribute("aria-label", `Carta ${index+1}, virada para baixo`);
+    button.innerHTML = `<span class="face back" aria-hidden="true">❔</span><span class="face front" aria-hidden="true">${animal.emoji}</span>`;
+    button.addEventListener("click", () => flip(button, animal));
+    return button;
+  }
+  function flip(button, animal) {
+    if (lock || button.classList.contains("revealed") || button.classList.contains("matched")) return;
+    button.classList.add("revealed");
+    button.setAttribute("aria-label", animal.name);
+    if (!first) {
+      first = {button, animal};
+      message.textContent = "Muito bem! Agora encontre outro igual.";
+      return;
+    }
+    second = {button, animal};
+    turns++;
+    turnsEl.textContent = turns;
+    if (first.animal.name === second.animal.name) {
+      first.button.classList.remove("revealed"); first.button.classList.add("matched");
+      second.button.classList.remove("revealed"); second.button.classList.add("matched");
+      first.button.setAttribute("aria-label", `${animal.name}, par encontrado`);
+      second.button.setAttribute("aria-label", `${animal.name}, par encontrado`);
+      pairs++; pairsEl.textContent = pairs;
+      first = second = null;
+      if (pairs === animals.length) {
+        message.textContent = "🎉 Você encontrou todos os pares! Parabéns!";
+      } else {
+        message.textContent = "🎉 Achou! Esses bichinhos são iguais!";
+      }
+    } else {
+      lock = true;
+      message.textContent = "Quase! Vamos tentar outro par.";
+      mismatchTimer = setTimeout(() => {
+        first.button.classList.remove("revealed");
+        second.button.classList.remove("revealed");
+        first.button.setAttribute("aria-label", "Carta virada para baixo");
+        second.button.setAttribute("aria-label", "Carta virada para baixo");
+        first = second = null; lock = false; mismatchTimer = null;
+      }, 900);
+    }
+  }
+  function newGame() {
+    if (mismatchTimer) clearTimeout(mismatchTimer);
+    mismatchTimer = null; first = second = null; lock = false; pairs = 0; turns = 0;
+    pairsEl.textContent = "0"; turnsEl.textContent = "0";
+    message.textContent = "Toque em duas cartas para brincar!";
+    board.replaceChildren();
+    const deck = shuffle([...animals, ...animals]);
+    deck.forEach((animal, i) => board.appendChild(makeCard(animal, i)));
+  }
+  restart.addEventListener("click", newGame);
+  show.addEventListener("click", () => {
+    if (mismatchTimer) clearTimeout(mismatchTimer);
+    mismatchTimer = null; lock = false; first = second = null;
+    [...board.children].forEach(card => {
+      card.classList.remove("revealed");
+      if (!card.classList.contains("matched")) card.setAttribute("aria-label", "Carta virada para baixo");
+    });
+    message.textContent = "Encontre os pares iguais! Você consegue!";
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>
